@@ -17,18 +17,18 @@ class hetero_model():
         self.train_nodes_size = len(self.train_nodes)
         self.batch_size = 300
         self.latent_dim = 200
-        self.pos_compound_size = 3
-        self.pos_gene_size = 3
-        self.neg_compound_size = 15
+        self.pos_compound_size = 2
+        self.pos_gene_size = 1
+        self.neg_compound_size = 30
         self.neg_gene_size = 30
-        self.negative_sample_size = self.neg_gene_size
+        self.negative_sample_size = self.neg_gene_size + self.neg_compound_size
         self.positive_sample_size = self.pos_compound_size+self.pos_gene_size-1
         self.walk_length = self.positive_sample_size
         self.skip_size = self.pos_compound_size+self.pos_gene_size
         """
         initialize input variables
         """
-        self.compound = tf.placeholder(tf.float32,[None,self.pos_compound_size,self.compound_size])
+        self.compound = tf.placeholder(tf.float32,[None,self.pos_compound_size+self.neg_compound_size,self.compound_size])
         self.gene = tf.placeholder(tf.float32,[None,self.pos_gene_size+self.neg_gene_size,self.gene_size])
         """
         initial relation type binds
@@ -37,9 +37,16 @@ class hetero_model():
         self.shape_relation = (self.latent_dim,)
         self.relation_binds = tf.Variable(self.init_binds(shape=self.shape_relation))
         """
+        initial relation type similar
+        """
+        self.init_similar = tf.keras.initializers.he_normal(seed=None)
+        self.shape_relation = (self.latent_dim,)
+        self.relation_similar = tf.Variable(self.init_similar(shape=self.shape_relation))
+        """
         Create meta_path type
         """
-        self.meta_path1 = ['c','g','c','g','c','g']
+        #self.meta_path1 = ['c','g','c','g','c','g']
+        self.meta_path1 = ['c','c','g']
 
     def config_model(self):
         self.build_hetero_model()
@@ -51,9 +58,6 @@ class hetero_model():
         tf.local_variables_initializer().run()
 
     def build_hetero_model(self):
-        """
-        build heterogenous graph learning model
-        """
         """
         build compound projection layer
         """
@@ -73,7 +77,8 @@ class hetero_model():
         """
         transE
         """
-        self.Dense_compound = tf.math.add(self.Dense_compound,self.relation_binds)
+        self.Dense_compound_sim = tf.math.add(self.Dense_compound,self.relation_similar)
+        self.Dense_compound_bind = tf.math.add(self.Dense_compound,self.relation_binds)
 
 
     def get_latent_rep(self):
@@ -93,10 +98,10 @@ class hetero_model():
         compound case
         """
         compound_idx_skip = tf.constant([i+1 for i in range(self.pos_compound_size-1)])
-        #compound_idx_negative = \
-        #    tf.constant([i+self.pos_compound_size for i in range(self.neg_compound_size)])
+        compound_idx_negative = \
+            tf.constant([i+self.pos_compound_size for i in range(self.neg_compound_size)])
         self.x_skip_compound = tf.gather(self.Dense_compound,compound_idx_skip,axis=1)
-        #self.x_negative_compound = tf.gather(self.Dense_compound,compound_idx_negative,axis=1)
+        self.x_negative_compound = tf.gather(self.Dense_compound,compound_idx_negative,axis=1)
         """
         gene case
         """
@@ -109,7 +114,7 @@ class hetero_model():
         combine skip samples and negative samples
         """
         self.x_skip = tf.concat([self.x_skip_compound,self.x_skip_gene],axis=1)
-        self.x_negative = self.x_negative_gene
+        self.x_negative = tf.concat([self.x_negative_compound,self.x_negative_gene],axis=1)
 
     def SGNN_loss(self):
         """
@@ -187,17 +192,23 @@ class hetero_model():
     def get_negative_sample_metapath(self):
 
         self.gene_neg_sample = np.zeros((self.neg_gene_size,self.gene_size))
+        self.compound_neg_sample = np.zeros((self.neg_compound_size,self.compound_size))
         index = 0
         for i in self.neg_nodes_gene:
             one_sample_neg_gene = self.assign_value_gene(i)
             self.gene_neg_sample[index,:] = one_sample_neg_gene
+            index += 1
+        index = 0
+        for i in self.neg_nodes_compound:
+            one_sample_neg_compound = self.assign_value_compound(i)
+            self.compound_neg_sample[index,:] = one_sample_neg_compound
             index += 1
 
     """
     prepare data for negative hererogenous sampling
     """
     def get_negative_samples(self,center_node_type,center_node_index):
-        neg_nodes_compound = []
+        self.neg_nodes_compound = []
         self.neg_nodes_gene = []
         """
         get neg set for gene
@@ -210,6 +221,13 @@ class hetero_model():
             for j in range(self.neg_gene_size):
                 index_sample = np.int(np.floor(np.random.uniform(0,len(neg_set_gene),1)))
                 self.neg_nodes_gene.append(neg_set_gene[index_sample])
+            compound_neighbor_nodes = self.kg.dic_compound[center_node_index]['neighbor_compound']
+            whole_compound_nodes = self.kg.dic_compound.keys()
+            compound_neighbor_nodes = compound_neighbor_nodes + self.walk_compound
+            neg_set_compound = [i for i in whole_compound_nodes if i not in compound_neighbor_nodes]
+            for j in range(self.neg_compound_size):
+                index_sample = np.int(np.floor(np.random.uniform(0,len(neg_set_compound),1)))
+                self.neg_nodes_compound.append(neg_set_compound[index_sample])
 
 
 
@@ -220,33 +238,55 @@ class hetero_model():
     def extract_meta_path(self,center_node_type,start_index,meta_path_type):
         walk = []
         walk.append([center_node_type,start_index])
+        meta_path_gen = meta_path_type[1:]
         cur_index = start_index
         cur_node_type = center_node_type
         self.walk_compound = []
         self.walk_gene = []
-        for i in meta_path_type:
-            if i == 'c':
-                if cur_node_type == 'g':
-                    neighbor = list(self.kg.dic_gene[cur_index]['neighbor_compound'])
-                    """
-                    uniformly generate sampling index
-                    """
-                    random_index = np.int(np.floor(np.random.uniform(0,len(neighbor),1)))
-                    cur_index = neighbor[random_index]
-                    cur_node_type = 'c'
-                    walk.append([cur_node_type,cur_index])
-                    self.walk_compound.append(cur_index)
-            if i == 'g':
-                if cur_node_type == 'c':
-                    neighbor = list(self.kg.dic_compound[cur_index]['neighbor_gene'])
-                    """
-                    uniformly generate sampling index
-                    """
-                    random_index = np.int(np.floor(np.random.uniform(0,len(neighbor),1)))
-                    cur_index = neighbor[random_index]
-                    cur_node_type = 'g'
-                    walk.append([cur_node_type,cur_index])
-                    self.walk_gene.append(cur_index)
+        flag = 0
+        while(flag == 0):
+            for i in meta_path_gen:
+                if i == 'c':
+                    if cur_node_type == 'g':
+                        neighbor = list(self.kg.dic_gene[cur_index]['neighbor_compound'])
+                        """
+                        uniformly generate sampling index
+                        """
+                        random_index = np.int(np.floor(np.random.uniform(0,len(neighbor),1)))
+                        cur_index = neighbor[random_index]
+                        cur_node_type = 'c'
+                        walk.append([cur_node_type,cur_index])
+                        self.walk_compound.append(cur_index)
+                    if cur_node_type == 'c':
+                        neighbor = list(self.kg.dic_compound[cur_index]['neighbor_compound'])
+                        random_index = np.int(np.floor(np.random.uniform(0, len(neighbor), 1)))
+                        cur_index = neighbor[random_index]
+                        while('neighbor_compound' not in self.kg.dic_compound[cur_index].keys()):
+                            random_index = np.int(np.floor(np.random.uniform(0, len(neighbor), 1)))
+                            cur_index = neighbor[random_index]
+                        cur_node_type = 'c'
+                        walk.append([cur_node_type, cur_index])
+                        self.walk_compound.append(cur_index)
+
+
+                if i == 'g':
+                    if cur_node_type == 'c':
+                        if ('neighbor_gene' not in self.kg.dic_compound[cur_index]):
+                            walk = []
+                            self.walk_compound = []
+                            self.walk_gene = []
+                            break
+                        else:
+                            flag = 1
+                        neighbor = list(self.kg.dic_compound[cur_index]['neighbor_gene'])
+                        """
+                        uniformly generate sampling index
+                        """
+                        random_index = np.int(np.floor(np.random.uniform(0,len(neighbor),1)))
+                        cur_index = neighbor[random_index]
+                        cur_node_type = 'g'
+                        walk.append([cur_node_type,cur_index])
+                        self.walk_gene.append(cur_index)
         return walk
 
 
@@ -254,18 +294,25 @@ class hetero_model():
     prepare one batch data
     """
     def get_one_batch(self,meta_path_type,center_node_type,start_index):
-        compound_sample = np.zeros((self.batch_size,self.pos_compound_size,self.compound_size))
+        compound_sample = np.zeros((self.batch_size,self.pos_compound_size+self.neg_compound_size,self.compound_size))
         gene_sample = np.zeros((self.batch_size,self.pos_gene_size+self.neg_gene_size,self.gene_size))
-        for i in range(self.batch_size):
-            center_node_index = self.train_nodes[i+start_index]
+        num_sample = 0
+        increament_step = 0
+        while num_sample < self.batch_size:
+        #for i in range(self.batch_size):
+            center_node_index = self.train_nodes[increament_step+start_index]
+            if not 'neighbor_compound' in self.kg.dic_compound[center_node_index]:
+                increament_step += 1
+                continue
             single_meta_path = self.extract_meta_path(center_node_type,center_node_index,meta_path_type)
             self.get_positive_sample_metapath(single_meta_path)
             self.get_negative_samples(center_node_type,center_node_index)
             self.get_negative_sample_metapath()
-            single_compound_sample = self.compound_nodes
+            single_compound_sample = np.concatenate((self.compound_nodes,self.compound_neg_sample))
             single_gene_sample = np.concatenate((self.gene_nodes,self.gene_neg_sample))
-            compound_sample[i,:,:] = single_compound_sample
-            gene_sample[i,:,:] = single_gene_sample
+            compound_sample[num_sample,:,:] = single_compound_sample
+            gene_sample[num_sample,:,:] = single_gene_sample
+            num_sample += 1
 
         return compound_sample, gene_sample
 
@@ -274,14 +321,18 @@ class hetero_model():
     """
     def train(self):
         iteration = np.int(np.floor(np.float(self.train_nodes_size)/self.batch_size))
-        for i in range(iteration):
-            batch_coumpound,batch_gene = self.get_one_batch(self.meta_path1,'c',i*self.batch_size)
-            err_ = self.sess.run([self.negative_sum,self.train_step_neg],feed_dict={self.compound:batch_coumpound,
-                                                                                    self.gene:batch_gene})
-            print(err_[0])
+        epoch=2
+        for j in range(epoch):
+            for i in range(iteration):
+                #if i > 300:
+                   # break
+                batch_coumpound,batch_gene = self.get_one_batch(self.meta_path1,'c',i*self.batch_size)
+                err_ = self.sess.run([self.negative_sum,self.train_step_neg],feed_dict={self.compound:batch_coumpound,
+                                                                                        self.gene:batch_gene})
+                print(err_[0])
 
     def test(self,compoundid,geneid):
-        compouond = np.zeors((1,self.pos_compound_size,self.compound_size))
+        compound = np.zeors((1,self.pos_compound_size,self.compound_size))
         compound[0,0,:] = self.assign_value_compound(compoundid)
-        embed_compound = self.sess.run([self.Dense_compound],feed_dict={self.})
+        #embed_compound = self.sess.run([self.Dense_compound],feed_dict={self.})
 
