@@ -15,7 +15,7 @@ class hetero_model():
         self.gene_size = len(list(kg.dic_gene.keys()))
         self.train_nodes = list(kg.dic_compound.keys())
         self.train_nodes_size = len(self.train_nodes)
-        self.batch_size = 300
+        self.batch_size = 64
         self.latent_dim = 200
         self.pos_compound_size = 2
         self.pos_gene_size = 1
@@ -93,15 +93,15 @@ class hetero_model():
         get center node representation, case where center node is compound
         """
         idx_origin = tf.constant([0])
-        self.x_origin =tf.gather(self.Dense_compound,idx_origin,axis=1)
+        self.x_origin =tf.gather(self.Dense_compound_bind,idx_origin,axis=1)
         """
         compound case
         """
         compound_idx_skip = tf.constant([i+1 for i in range(self.pos_compound_size-1)])
         compound_idx_negative = \
             tf.constant([i+self.pos_compound_size for i in range(self.neg_compound_size)])
-        self.x_skip_compound = tf.gather(self.Dense_compound,compound_idx_skip,axis=1)
-        self.x_negative_compound = tf.gather(self.Dense_compound,compound_idx_negative,axis=1)
+        self.x_skip_compound = tf.gather(self.Dense_compound_bind,compound_idx_skip,axis=1)
+        self.x_negative_compound = tf.gather(self.Dense_compound_bind,compound_idx_negative,axis=1)
         """
         gene case
         """
@@ -321,7 +321,7 @@ class hetero_model():
     """
     def train(self):
         iteration = np.int(np.floor(np.float(self.train_nodes_size)/self.batch_size))
-        epoch=2
+        epoch=6
         for j in range(epoch):
             for i in range(iteration):
                 #if i > 300:
@@ -331,8 +331,10 @@ class hetero_model():
                                                                                         self.gene:batch_gene})
                 print(err_[0])
 
-    def test(self,compoundid,geneid):
-        compound = np.zeors((1,self.pos_compound_size,self.compound_size))
-        compound[0,0,:] = self.assign_value_compound(compoundid)
+    def test_whole(self):
+        test_compound = np.zeors((self.compound_size,self.pos_compound_size+self.neg_compound_size,self.compound_size))
+        test_gene = np.zeros((self.gene_size,self.pos_gene_size+self.neg_gene_size,self.gene_size))
+        for i in range(self.compound_size):
+            compound[0,0,:] = self.assign_value_compound(compoundid)
         #embed_compound = self.sess.run([self.Dense_compound],feed_dict={self.})
 
