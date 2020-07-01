@@ -1,24 +1,36 @@
+import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import random
 import networkx as nx
 import math
 import time
+import argparse
+import pickle
 from kg_model import hetero_model
 from sklearn.manifold import TSNE
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Skip-gram model")
+    parser.add_argument('--c2b2rdf', nargs='?', default='../data/c2b2rdf/relations.txt', help='chem2bio2rdf relations')
+    parser.add_argument('--positive-file', nargs='?', default='../data/c2b2rdf/compound-gene/internal_testset_label/positive.txt', help='positive relations')
+    parser.add_argument('--negative-file', nargs='?', default='../data/c2b2rdf/compound-gene/internal_testset_label/negative.txt', help='negative relations')
+    parser.add_argument('--output', nargs='?', default=None, help="file to save embeddings")
+    parser.add_argument('--compound-sim-file', nargs='?', default='data/compound_structure_similarity.txt', help='compound similarity')
+    parser.add_argument('--nodes', nargs='?', default='data/nodes.txt', help='nodes file')
+    return parser.parse_args()
 
 class Kg_construct_chem2bio():
     """
     construct knowledge graph out of EHR data
     """
-    def __init__(self):
-        file_path = '/home/tingyi/data_chen2bio'
-        file_path_compound = '/home/tingyi/data_chen2bio/compound_sim'
-        self.chen2bio2rdf_file = file_path + '/chem2bio2rdf.txt'
-        self.positive_file = file_path + '/positive.txt'
-        self.negative_file = file_path + '/negative.txt'
-        self.compound_sim = file_path_compound + '/compound_structure_similarity.txt'
-        self.file_graph = open(self.chen2bio2rdf_file)
+    def __init__(self, c2b2rdf_file, pos_file, neg_file, comp_sim_file):
+        self.chem2bio2rdf_file = c2b2rdf_file
+        self.positive_file = pos_file
+        self.negative_file = neg_file
+        self.compound_sim = comp_sim_file
+        self.file_graph = open(self.chem2bio2rdf_file)
         self.file_positive = open(self.positive_file)
         self.file_negative = open(self.negative_file)
         self.file_compound_sim = open(self.compound_sim)
@@ -32,8 +44,6 @@ class Kg_construct_chem2bio():
         index_count = 0
         index_compound = 0
         for line in self.file_graph:
-            #if index_count > 10000:
-                #break
             line = line.rstrip('\r\n')
             rough = line.split('\t')
             first_comp_name = rough[0].split('/')[-2]
@@ -45,14 +55,14 @@ class Kg_construct_chem2bio():
             first_comp_id = rough[0].split('/')[-1]
             second_comp_relation = rough[1].split('/')[-1]
             second_comp_id = rough[2].split('/')[-1]
-            if not self.dic_compound.has_key(first_comp_id):
+            if not self.dic_compound.get(first_comp_id):
                 self.dic_compound[first_comp_id] = {}
                 self.dic_compound[first_comp_id]['compound_index'] = index_compound
                 self.dic_compound[first_comp_id].setdefault('neighbor_gene',[]).append(second_comp_id)
                 index_compound += 1
             else:
                 self.dic_compound[first_comp_id].setdefault('neighbor_gene', []).append(second_comp_id)
-            if not self.dic_gene.has_key(second_comp_id):
+            if not self.dic_gene.get(second_comp_id):
                 self.dic_gene[second_comp_id] = {}
                 self.dic_gene[second_comp_id]['gene_index'] = index_gene
                 self.dic_gene[second_comp_id].setdefault('neighbor_compound',[]).append(first_comp_id)
@@ -66,13 +76,13 @@ class Kg_construct_chem2bio():
             rough = line.split('|')
             first_comp_id = rough[0]
             sec_comp_id = rough[1]
-            if not self.dic_compound.has_key(first_comp_id):
+            if not self.dic_compound.get(first_comp_id):
                 continue
                 #self.dic_compound[first_comp_id] = {}
                 #self.dic_compound[first_comp_id]['compound_index'] = index_compound
                 #self.dic_compound[first_comp_id].setdefault('neighbor_compound',[]).append(sec_comp_id)
                 #index_compound += 1
-            if not self.dic_compound.has_key(sec_comp_id):
+            if not self.dic_compound.get(sec_comp_id):
                 continue
 
             self.dic_compound[first_comp_id].setdefault('neighbor_compound', []).append(sec_comp_id)
@@ -119,14 +129,61 @@ def test_acc(hetro,kg):
     return tp_num
 
 
+def read_file(filepath):
 
+    result = []
+    with open(filepath, 'r') as file:
+        for line in file:
+            line = line.strip()
+            result.append(line)
+
+    return result
 
 if __name__  == "__main__":
-    kg = Kg_construct_chem2bio()
+    args = parse_args()
+    kg = Kg_construct_chem2bio(c2b2rdf_file=args.c2b2rdf, pos_file=args.positive_file, neg_file=args.negative_file, comp_sim_file=args.compound_sim_file)
     kg.create_kg_dic()
     hetero_model = hetero_model(kg)
     hetero_model.config_model()
     hetero_model.train()
+    print('--- Read Nodes ---')
+    nodes = read_file(args.nodes)
+    embeddings = []
+    compound_url = 'http://chem2bio2rdf.org/pubchem/resource/pubchem_compound/'
+    gene_url = 'http://chem2bio2rdf.org/uniprot/resource/gene/'
+    compound_nodes = []
+    gene_nodes = []
+
+    for node in nodes:
+        if compound_url in node:
+            compound_nodes.append(node)
+        if gene_url in node:
+            gene_nodes.append(node)
+
+    embeddings = {}
+    print('--- Computing Embeddings ---')
+    for i, node in enumerate(compound_nodes):
+        compoundid = os.path.basename(node)
+        if compoundid not in kg.dic_compound.keys():
+            continue
+        compound = np.zeros((1, hetero_model.pos_compound_size+hetero_model.neg_compound_size, hetero_model.compound_size))
+        compound[0, 0, :] = hetero_model.assign_value_compound(compoundid)
+        embed_compound = hetero_model.sess.run(hetero_model.Dense_compound_sim,feed_dict={hetero_model.compound:compound})
+        embeddings[node] = embed_compound[0,0,:]
+
+    for i, node in enumerate(gene_nodes):
+        geneid = os.path.basename(node)
+        if geneid not in kg.dic_gene.keys():
+            continue
+        gene = np.zeros((1,hetero_model.pos_gene_size+hetero_model.neg_gene_size,hetero_model.gene_size))
+        gene[0,0,:] = hetero_model.assign_value_gene(geneid)
+        embed_gene = hetero_model.sess.run(hetero_model.Dense_gene,feed_dict={hetero_model.gene:gene})
+        embeddings[node] = embed_gene[0,0,:]
+
+    print(embeddings)
+    print('--- Saving Embeddings ---')
+    pickle.dump(embeddings, open(args.output, 'wb'))
+
     """
     positive = '/home/tingyi/data_chen2bio/positive.txt'
     negative = '/home/tingyi/data_chen2bio/negative.txt'
@@ -197,7 +254,7 @@ if __name__  == "__main__":
     precision = float(tp)/(tp+fp)
     recall = float(tp)/(num_pos_total)
     f1 = 2*(precision*recall)/(precision+recall)
-    
+
     for i in kg.dic_diag.keys():
         index_class = kg.dic_diag[i]['icd']
         index = kg.dic_diag[i]['diag_index']
@@ -214,8 +271,4 @@ if __name__  == "__main__":
             makersize_ = 6
         plt.plot(embed_total_2d[i][0],embed_total_2d[i][1],'.',color=color_,markersize=makersize_)
     """
-    embed_total_2d = TSNE(n_components=2).fit_transform(embed_total)
-
-
-
-
+    # embed_total_2d = TSNE(n_components=2).fit_transform(embed_total)
