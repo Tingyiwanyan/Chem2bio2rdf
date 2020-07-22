@@ -6,6 +6,7 @@ import math
 import time
 from kg_model import hetero_model
 from sklearn.manifold import TSNE
+from graph_sage import graphsage_model
 
 class Kg_construct_chem2bio():
     """
@@ -32,8 +33,8 @@ class Kg_construct_chem2bio():
         index_count = 0
         index_compound = 0
         for line in self.file_graph:
-            #if index_count > 10000:
-                #break
+            #if index_count > 20000:
+               # break
             line = line.rstrip('\r\n')
             rough = line.split('\t')
             first_comp_name = rough[0].split('/')[-2]
@@ -81,23 +82,32 @@ class Kg_construct_chem2bio():
 
 def test_whole(hetro,kg):
     embed_compound = np.zeros((hetro.compound_size,hetro.latent_dim))
+    compound_id = np.zeros(hetro.compound_size)
     embed_gene = np.zeros((hetro.gene_size,hetro.latent_dim))
+    gene_id = np.zeros(hetro.gene_size)
     index = 0
     for i in kg.dic_compound.keys():
+        print(index)
         single_compound = np.zeros((1,hetro.pos_compound_size+hetro.neg_compound_size,hetro.compound_size))
         single_compound[0,0,:] = hetro.assign_value_compound(i)
         single_embed_coumpound =  hetro.sess.run(hetro.Dense_compound_bind,feed_dict={hetro.compound:single_compound})
         embed_compound[index,:] = single_embed_coumpound[0,0,:]
+        compound_id[index] = i
         index += 1
     index = 0
     for i in kg.dic_gene.keys():
+        print(index)
         single_gene = np.zeros((1,hetro.pos_gene_size+hetro.neg_gene_size,hetro.gene_size))
         single_gene[0,0,:] = hetro.assign_value_gene(i)
         single_embed_gene = hetro.sess.run(hetro.Dense_gene,
                                                  feed_dict={hetro.gene:single_gene})
         embed_gene[index,:] = single_embed_gene[0,0,:]
+        gene_id[index] = i
         index += 1
-    return embed_compound,embed_gene
+    return embed_compound,embed_gene,compound_id,gene_id
+
+
+
 
 def test_acc(hetro,kg):
     tp_num = 0
@@ -118,15 +128,67 @@ def test_acc(hetro,kg):
 
     return tp_num
 
+def test_acc_sage(hetro,kg):
+    tp_num = 0
+    index = 0
+    for i in kg.dic_compound.keys():
+        print(index)
+        single_compound = np.zeros((1, hetro.pos_sample_size + hetro.neg_sample_size+1, hetro.total_size))
+        single_compound[0, 0, :] = hetro.gcn_agg_compound(i)
+        single_embed_coumpound = hetro.sess.run(hetro.Dense_gcn, feed_dict={hetro.input_x: single_compound})
+        link_gene = kg.dic_compound[i]['neighbor_gene'][0]
+        single_gene = np.zeros((1,hetro.pos_sample_size+hetro.neg_sample_size+1,hetro.total_size))
+        single_gene[0,0,:] = hetro.gcn_agg_gene(link_gene)
+        single_embed_gene = hetro.sess.run(hetro.Dense_gcn,
+                                           feed_dict={hetro.input_x: single_gene})
+
+        score = np.sum(np.multiply(single_embed_coumpound[0,0,:], single_embed_gene[0,0,:]))
+
+        if score > 0:
+            tp_num += 1
+        index+=1
+
+    return tp_num
+
 
 
 
 if __name__  == "__main__":
     kg = Kg_construct_chem2bio()
     kg.create_kg_dic()
-    hetero_model = hetero_model(kg)
-    hetero_model.config_model()
-    hetero_model.train()
+    gsage = graphsage_model(kg)
+    #hetero_model = hetero_model(kg)
+    #hetero_model.config_model()
+    #hetero_model.train()
+    """
+    hetro = hetero_model
+    embed_compound = np.zeros((hetro.compound_size, hetro.latent_dim))
+    compound_id = np.zeros(hetro.compound_size)
+    gene_id = np.zeros(hetro.gene_size)
+    index = 0
+    for i in kg.dic_compound.keys():
+        print(index)
+        single_compound = np.zeros((1, hetro.pos_compound_size + hetro.neg_compound_size, hetro.compound_size))
+        single_compound[0, 0, :] = hetro.assign_value_compound(i)
+        single_embed_coumpound = hetro.sess.run(hetro.Dense_compound_bind, feed_dict={hetro.compound: single_compound})
+        embed_compound[index, :] = single_embed_coumpound[0, 0, :]
+        compound_id[index] = i
+        index += 1
+
+    gene_id = []
+    embed_gene = np.zeros((hetro.gene_size, hetro.latent_dim))
+    index = 0
+    for i in kg.dic_gene.keys():
+        print(index)
+        single_gene = np.zeros((1, hetro.pos_gene_size + hetro.neg_gene_size, hetro.gene_size))
+        single_gene[0, 0, :] = hetro.assign_value_gene(i)
+        single_embed_gene = hetro.sess.run(hetro.Dense_gene,
+                                           feed_dict={hetro.gene: single_gene})
+        embed_gene[index, :] = single_embed_gene[0, 0, :]
+        gene_id.append(str(i))
+        index += 1
+    """
+
     """
     positive = '/home/tingyi/data_chen2bio/positive.txt'
     negative = '/home/tingyi/data_chen2bio/negative.txt'
@@ -214,7 +276,7 @@ if __name__  == "__main__":
             makersize_ = 6
         plt.plot(embed_total_2d[i][0],embed_total_2d[i][1],'.',color=color_,markersize=makersize_)
     """
-    embed_total_2d = TSNE(n_components=2).fit_transform(embed_total)
+    #embed_total_2d = TSNE(n_components=2).fit_transform(embed_total)
 
 
 

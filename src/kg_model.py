@@ -15,7 +15,7 @@ class hetero_model():
         self.gene_size = len(list(kg.dic_gene.keys()))
         self.train_nodes = list(kg.dic_compound.keys())
         self.train_nodes_size = len(self.train_nodes)
-        self.batch_size = 64
+        self.batch_size = 128
         self.latent_dim = 200
         self.pos_compound_size = 2
         self.pos_gene_size = 1
@@ -170,6 +170,7 @@ class hetero_model():
 
         return one_sample
 
+
     """
     preparing data for one metapath
     """
@@ -321,7 +322,7 @@ class hetero_model():
     """
     def train(self):
         iteration = np.int(np.floor(np.float(self.train_nodes_size)/self.batch_size))
-        epoch=6
+        epoch=2
         for j in range(epoch):
             for i in range(iteration):
                 #if i > 300:
